@@ -57,9 +57,12 @@ jobs:
           if [ "$ACT" = "no" ]; then
             case "$TOPIC" in "Часть 1"*) [ -f state/series-queue.json ] && mv state/series-queue.json state/series-queue.rejected.json ;; esac
           fi
-      - name: Публикация на все площадки
+      - name: В очередь на прайм-тайм
         if: env.ACT == 'ok' && env.MAC == ''
-        run: PYTHONPATH=pipeline python pipeline/publish.py "$ID"
+        run: |
+          grep -qx "$ID" state/publish-queue.txt 2>/dev/null || echo "$ID" >> state/publish-queue.txt
+          N=$(grep -c . state/publish-queue.txt)
+          PYTHONPATH=pipeline python -c "from common import tg,E; tg('sendMessage', chat=E['TG_CHAT_ID'], text='⏰ В очереди: $N. Выйдет в ближайший прайм-тайм (12:00 / 18:00 / 21:00 МСК). Сразу — команда /now')"
       - name: Сохранить
         if: always()
         run: |

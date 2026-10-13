@@ -1,0 +1,33 @@
+name: Файл из бота (фон / баннер)
+
+on:
+  repository_dispatch:
+    types: [asset]
+
+concurrency:
+  group: assets
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  asset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -q requests && sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
+      - name: Обработать
+        env:
+          KIND: ${{ github.event.client_payload.kind }}
+          FID: ${{ github.event.client_payload.file_id }}
+          FUID: ${{ github.event.client_payload.uid }}
+        run: PYTHONPATH=pipeline python pipeline/asset.py "$KIND" "$FID" "$FUID"

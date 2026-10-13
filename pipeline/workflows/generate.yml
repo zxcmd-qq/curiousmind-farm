@@ -65,7 +65,11 @@ jobs:
         run: |
           mkdir -p bg && cd bg
           gh release download assets -p '*.zip' -R "$GITHUB_REPOSITORY" || echo "фонов нет"
-          for z in *.zip; do [ -f "$z" ] && unzip -q -o "$z" -d "${z%.zip}"; done; ls -R | head -20
+          for z in *.zip; do [ -f "$z" ] && unzip -q -o "$z" -d "${z%.zip}"; done
+          mkdir -p minecraft satisfy
+          gh release download assets -p 'bg-minecraft-*' -D minecraft -R "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh release download assets -p 'bg-satisfy-*' -D satisfy -R "$GITHUB_REPOSITORY" 2>/dev/null || true
+          echo "фонов: майнкрафт $(ls minecraft | wc -l), сатисфай $(ls satisfy | wc -l)"
 
       - name: Запуск генератора
         run: |
