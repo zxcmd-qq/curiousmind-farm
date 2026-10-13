@@ -1,0 +1,112 @@
+// Curious Mind — генерация одного ролика на GitHub Actions.
+// Логика сценариев — те же JS-ноды, что в n8n (pipeline/nodes/*.js), тут только «клей».
+import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
+
+const env = process.env;
+const ST = 'state';
+const MPT = 'http://127.0.0.1:8080';
+const REPO = env.GITHUB_REPOSITORY;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const read = (f, d = '') => { try { return fs.readFileSync(f, 'utf8'); } catch { return d; } };
+const append = (f, s) => fs.appendFileSync(f, s.endsWith('\n') ? s : s + '\n');
+const log = (...a) => console.log('▶', ...a);
+
+const out = {};
+const $ = name => ({ first: () => ({ json: out[name] }), item: { json: out[name] }, all: () => [{ json: out[name] }] });
+function node(file, $json) {
+  const code = fs.readFileSync(`pipeline/nodes/${file}.js`, 'utf8');
+  return new Function('$', '$json', code)($, $json)[0].json;
+}
+
+async function tg(method, body, isForm = false) {
+  const r = await fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/${method}`,
+    isForm ? { method: 'POST', body } : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!j.ok) log('telegram:', method, JSON.stringify(j).slice(0, 300));
+  return j;
+}
+
+async function main() {
+  // 1. Settings
+  out['Settings'] = { TG_BOT_TOKEN: env.TG_BOT_TOKEN, TG_CHAT_ID: env.TG_CHAT_ID, MPT, FORCE_FORMAT: env.FORMAT || '',
+    VOICE: env.VOICE || 'gemini:Fenrir-Excitable', trigger: 'make' };
+
+  // 2. Read Used + insights → Pick Format
+  const used = read(`${ST}/used-facts.txt`).split('\n').slice(-300).join('\n');
+  out['Read Used'] = { stdout: used + "\n@@INSIGHTS@@\n" + read(`${ST}/insights.json`, '{}') };
+  out['Pick Format'] = node('Pick_Format', out['Read Used']);
+  const format = out['Pick Format'].format;
+  log('format:', format, '| cat:', out['Pick Format'].cat);
+
+  // 3. Get Reddit (Пикабу или часть 2 сериала)
+  let stdout = '{}';
+  if (format === 'reddit') {
+    const q = `${ST}/series-queue.json`;
+    if (read(q).trim()) { stdout = read(q); fs.renameSync(q, `${ST}/series-queue.used.json`); log('сериал: часть 2'); }
+    else {
+      try { stdout = execFileSync('python', ['pipeline/pikabu_fetch.py'], { env: { ...env, CM_STATE: ST }, encoding: 'utf8', timeout: 180000 }); }
+      catch (e) { log('pikabu fail:', String(e.stderr || e).slice(0, 300)); }
+    }
+  }
+  out['Get Reddit'] = { stdout };
+
+  // 4. Build Prompt → Gemini → Build Task
+  out['Build Prompt'] = node('Build_Prompt');
+  const gem = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_KEY },
+    body: JSON.stringify({ generationConfig: { responseMimeType: 'application/json', temperature: 1.0 },
+      contents: [{ parts: [{ text: out['Build Prompt'].prompt }] }] }) }).then(r => r.json());
+  out['Script (Gemini)'] = gem;
+  const bt = node('Build_Task', gem);
+  out['Build Task'] = bt;
+
+  // 5. Remember
+  if (bt.topic) append(`${ST}/used-facts.txt`, String(bt.topic).replace(/[`$\\"]/g, ''));
+  if (bt.redditId) append(`${ST}/used-facts.txt`, 'pikabu:' + bt.redditId);
+  for (const id of bt.redditIds || []) append(`${ST}/used-facts.txt`, 'pikabu:' + id);
+  if (bt.queueB64) fs.writeFileSync(`${ST}/series-queue.json`, Buffer.from(bt.queueB64, 'base64').toString('utf8'));
+  if (bt.blocked) {
+    await tg('sendMessage', { chat_id: env.TG_CHAT_ID, text: `⚠️ Gemini заблокировал истории с Пикабу (${bt.blocked}). Выкинул пачку (${(bt.redditIds || []).length} шт.), в следующий раз будут другие.` });
+    return;
+  }
+
+  // 6. MoneyPrinterTurbo
+  const cr = await fetch(`${MPT}/api/v1/videos`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bt.body) }).then(r => r.json());
+  const taskId = cr?.data?.task_id;
+  if (!taskId) throw new Error('MPT не принял задачу: ' + JSON.stringify(cr).slice(0, 300));
+  log('task', taskId);
+  let state = 0;
+  for (let i = 0; i < 160 && state !== 1; i++) {
+    await sleep(15000);
+    const t = await fetch(`${MPT}/api/v1/tasks/${taskId}`).then(r => r.json()).catch(() => ({}));
+    state = t?.data?.state;
+    if (state === -1) throw new Error('MPT: задача упала, смотри mpt.log');
+    if (i % 4 === 0) log('progress', t?.data?.progress);
+  }
+  const video = `storage/tasks/${taskId}/final-1.mp4`;
+  if (state !== 1 || !fs.existsSync(video)) throw new Error('видео не готово');
+
+  // 7. Видео + описание → релиз «videos» (оттуда Мак его скачает после ✅)
+  const meta = { id: taskId, topic: bt.topic, format: bt.format, label: bt.label, script: bt.script,
+    quiz: bt.quizB64 ? JSON.parse(Buffer.from(bt.quizB64, 'base64').toString('utf8')) : null, created: new Date().toISOString() };
+  fs.writeFileSync(`${taskId}.json`, JSON.stringify(meta, null, 1));
+  fs.copyFileSync(video, `${taskId}.mp4`);
+  execFileSync('gh', ['release', 'upload', 'videos', `${taskId}.mp4`, `${taskId}.json`, '--clobber', '-R', REPO], { stdio: 'inherit' });
+
+  // 8. Тебе в ТГ на проверку
+  const fd = new FormData();
+  fd.append('chat_id', env.TG_CHAT_ID);
+  fd.append('caption', (bt.label + ': ' + bt.topic + '\n\nТекст озвучки:\n' + bt.script).slice(0, 1000));
+  fd.append('width', '1080'); fd.append('height', '1920'); fd.append('supports_streaming', 'true');
+  fd.append('reply_markup', JSON.stringify({ inline_keyboard: [[{ text: '✅ Постить', callback_data: 'ok:' + taskId }, { text: '❌ Удалить', callback_data: 'no:' + taskId }]] }));
+  fd.append('video', new Blob([fs.readFileSync(video)], { type: 'video/mp4' }), 'video.mp4');
+  await tg('sendVideo', fd, true);
+  log('готово:', bt.label, bt.topic);
+}
+
+main().catch(async e => {
+  console.error(e);
+  await tg('sendMessage', { chat_id: env.TG_CHAT_ID, text: '❌ GitHub-генерация упала: ' + String(e.message || e).slice(0, 300) + `\nhttps://github.com/${REPO}/actions` }).catch(() => {});
+  process.exit(1);
+});

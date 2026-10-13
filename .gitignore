@@ -1,0 +1,10 @@
+config.toml
+storage/
+bg/
+models/
+__pycache__/
+*.pyc
+.DS_Store
+mpt.log
+*.mp4
+_t.mjs

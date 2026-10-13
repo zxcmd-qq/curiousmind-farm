@@ -1,0 +1,42 @@
+name: Решение по ролику (✅/❌ с Мака)
+
+on:
+  repository_dispatch:
+    types: [decision]
+
+concurrency:
+  group: state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  save:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Записать решение
+        env:
+          P: ${{ toJson(github.event.client_payload) }}
+        run: |
+          python - <<'EOF'
+          import json, os
+          p = json.loads(os.environ["P"])
+          st = "state"
+          if p.get("act") == "ok" and p.get("id"):
+              open(f"{st}/approved.log", "a").write(p["id"] + "\n")
+          if p.get("act") == "no" and str(p.get("topic", "")).startswith("Часть 1"):
+              q = f"{st}/series-queue.json"
+              if os.path.exists(q):
+                  os.replace(q, f"{st}/series-queue.rejected.json")
+          if p.get("insights"):
+              json.dump(p["insights"], open(f"{st}/insights.json", "w"), ensure_ascii=False)
+          print("ok", p.get("act"), p.get("id"))
+          EOF
+      - name: Сохранить
+        run: |
+          git config user.name "curiousmind-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add state
+          git diff --cached --quiet || (git commit -q -m "decision" && git pull -q --rebase && git push -q)

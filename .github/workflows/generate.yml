@@ -1,0 +1,91 @@
+name: Сгенерировать ролик
+
+on:
+  schedule:
+    - cron: '0 7 * * *'    # утро (9:00 летом / 8:00 зимой по Варшаве) → факт
+    - cron: '0 12 * * *'   # день → квиз
+    - cron: '0 17 * * *'   # вечер → история
+  workflow_dispatch:
+    inputs:
+      format:
+        description: 'facts / quiz / reddit'
+        default: 'facts'
+
+concurrency:
+  group: generate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  make:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      FORMAT: ${{ github.event.schedule == '0 7 * * *' && 'facts' || github.event.schedule == '0 12 * * *' && 'quiz' || github.event.schedule == '0 17 * * *' && 'reddit' || inputs.format }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+      VOICE: ${{ vars.VOICE }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
+
+      - name: Python-пакеты
+        run: pip install -q -r requirements.txt curl_cffi
+
+      - name: Модель Whisper (кэш)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: whisper-large-v3
+
+      - name: Конфиг
+        env:
+          MPT_CONFIG_B64: ${{ secrets.MPT_CONFIG_B64 }}
+        run: |
+          echo "$MPT_CONFIG_B64" | base64 -d > config.toml
+          python pipeline/runner_config.py config.toml "$PWD/bg"
+
+      - name: Фоны для историй
+        if: env.FORMAT == 'reddit'
+        run: |
+          mkdir -p bg && cd bg
+          gh release download assets -p '*.zip' -R "$GITHUB_REPOSITORY" || echo "фонов нет"
+          for z in *.zip; do [ -f "$z" ] && unzip -q -o "$z" -d "${z%.zip}"; done; ls -R | head -20
+
+      - name: Запуск генератора
+        run: |
+          nohup python main.py > mpt.log 2>&1 &
+          for i in $(seq 1 60); do curl -s http://127.0.0.1:8080/docs > /dev/null && break; sleep 2; done
+
+      - name: Релиз videos
+        run: gh release view videos -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 || gh release create videos -R "$GITHUB_REPOSITORY" -t "Готовые ролики" -n "Сюда кладутся ролики на проверку" --latest=false
+
+      - name: Сделать ролик
+        run: node pipeline/run.mjs
+
+      - name: Лог генератора
+        if: always()
+        run: tail -n 80 mpt.log || true
+
+      - name: Сохранить состояние
+        if: always()
+        run: |
+          git config user.name "curiousmind-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add state
+          git diff --cached --quiet || (git commit -q -m "state: ${FORMAT}" && git pull -q --rebase && git push -q)
