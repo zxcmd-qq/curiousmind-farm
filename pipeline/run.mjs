@@ -53,10 +53,18 @@ async function main() {
 
   // 4. Build Prompt → Gemini → Build Task
   out['Build Prompt'] = node('Build_Prompt');
-  const gem = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent', {
-    method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_KEY },
-    body: JSON.stringify({ generationConfig: { responseMimeType: 'application/json', temperature: 1.0 },
-      contents: [{ parts: [{ text: out['Build Prompt'].prompt }] }] }) }).then(r => r.json());
+  log('prompt:', out['Build Prompt'].format, '| историй:', (out['Build Prompt'].stories || []).length, '| символов:', out['Build Prompt'].prompt.length);
+  let gem = {};
+  for (let attempt = 1; attempt <= 4; attempt++) {   // Gemini иногда отвечает 429/503 — ждём и пробуем ещё
+    gem = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_KEY },
+      body: JSON.stringify({ generationConfig: { responseMimeType: 'application/json', temperature: 1.0 },
+        contents: [{ parts: [{ text: out['Build Prompt'].prompt }] }] }) }).then(r => r.json()).catch(e => ({ error: { message: String(e) } }));
+    if (gem.candidates?.[0]?.content?.parts?.[0]?.text || gem.promptFeedback?.blockReason) break;
+    log(`Gemini попытка ${attempt}:`, JSON.stringify(gem).slice(0, 400));
+    if (attempt < 4) await sleep(30000 * attempt);
+  }
+  if (gem.error) throw new Error('Gemini: ' + (gem.error.message || JSON.stringify(gem.error)).slice(0, 250));
   out['Script (Gemini)'] = gem;
   const bt = node('Build_Task', gem);
   out['Build Task'] = bt;
