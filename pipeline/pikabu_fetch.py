@@ -10,7 +10,7 @@ PAGES = ["https://pikabu.ru/community/stories?f=best",
          "https://pikabu.ru/tag/%D0%98%D1%81%D1%82%D0%BE%D1%80%D0%B8%D1%8F%20%D0%B8%D0%B7%20%D0%B6%D0%B8%D0%B7%D0%BD%D0%B8?n=4",
          "https://pikabu.ru/community/stories?page=2", "https://pikabu.ru/community/stories?f=best&page=2",
          "https://pikabu.ru/community/stories?f=best&page=3"]
-BAD = re.compile(r"суицид|самоубий|изнасил|педофил|умер|умерла|смерт|похорон|рак |онколог|детдом|избил|насили", re.I)
+BAD = re.compile(r"суицид|самоубий|изнасил|педофил|умер|умерла|смерт|похорон|рак |онколог|детдом|избил|насили|кров(ь|и\b|ью|ав|оте)|труп|убил|убий|зарезал|нож[оа]м|ранен|травм|перелом|драк|авари|дтп|больниц|реанимац|скорая|морг|мертв|покойн|полици|\bмент[ыо]|секс|интим|голая|голый|голые|член|минет|порн|эрот|18\+|наркот|закладк|блев|рвот|понос|гинеколог|беремен|аборт|войн|сво |политик", re.I)
 
 
 def used_ids():
@@ -74,6 +74,7 @@ def main():
     if not pool:
         source = "cache"
         pool = [s for s in cache if s["id"] not in used]
+    pool = [s for s in pool if not BAD.search(s.get("title", "") + " " + s.get("text", ""))]   # и старый кэш тоже фильтруем
     pool.sort(key=lambda s: -s.get("rating", 0))
     top = pool[:12]
     random.shuffle(top)
