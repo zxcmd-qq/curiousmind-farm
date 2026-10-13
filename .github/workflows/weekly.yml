@@ -1,0 +1,45 @@
+name: Подборка недели
+
+on:
+  schedule:
+    - cron: '0 16 * * 0'   # воскресенье ~18:00 по Варшаве
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'за сколько дней'
+        default: '7'
+
+concurrency:
+  group: generate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      GH_TOKEN: ${{ github.token }}
+      DAYS: ${{ inputs.days || '7' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
+      - name: Python-пакеты
+        run: pip install -q -r requirements.txt
+      - name: Конфиг
+        env:
+          MPT_CONFIG_B64: ${{ secrets.MPT_CONFIG_B64 }}
+        run: |
+          echo "$MPT_CONFIG_B64" | base64 -d > config.toml
+          python pipeline/runner_config.py config.toml "$PWD/bg"
+      - name: Собрать подборку
+        run: python pipeline/weekly.py

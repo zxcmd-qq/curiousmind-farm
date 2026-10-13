@@ -1,8 +1,16 @@
-name: Решение по ролику (✅/❌ с Мака)
+name: Решение по ролику (✅ публикация / ❌ удаление)
 
 on:
   repository_dispatch:
     types: [decision]
+  workflow_dispatch:
+    inputs:
+      id:
+        description: 'id ролика'
+        required: true
+      act:
+        description: 'ok / no'
+        default: 'ok'
 
 concurrency:
   group: state
@@ -12,31 +20,50 @@ permissions:
   contents: write
 
 jobs:
-  save:
+  decide:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      ID: ${{ github.event.client_payload.id || inputs.id }}
+      ACT: ${{ github.event.client_payload.act || inputs.act }}
+      MAC: ${{ github.event.client_payload.from_mac || '' }}
+      GH_TOKEN: ${{ github.token }}
+      GH_PAT: ${{ secrets.GH_PAT }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+      YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+      YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+      YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+      TT_CLIENT_KEY: ${{ secrets.TT_CLIENT_KEY }}
+      TT_CLIENT_SECRET: ${{ secrets.TT_CLIENT_SECRET }}
+      TT_REFRESH_TOKEN: ${{ secrets.TT_REFRESH_TOKEN }}
+      IG_TOKEN: ${{ secrets.IG_TOKEN }}
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      TG_CHANNEL: ${{ secrets.TG_CHANNEL }}
+      TG_CHANNEL_BOT_TOKEN: ${{ secrets.TG_CHANNEL_BOT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -q requests
       - name: Записать решение
-        env:
-          P: ${{ toJson(github.event.client_payload) }}
         run: |
-          python - <<'EOF'
-          import json, os
-          p = json.loads(os.environ["P"])
-          st = "state"
-          if p.get("act") == "ok" and p.get("id"):
-              open(f"{st}/approved.log", "a").write(p["id"] + "\n")
-          if p.get("act") == "no" and str(p.get("topic", "")).startswith("Часть 1"):
-              q = f"{st}/series-queue.json"
-              if os.path.exists(q):
-                  os.replace(q, f"{st}/series-queue.rejected.json")
-          if p.get("insights"):
-              json.dump(p["insights"], open(f"{st}/insights.json", "w"), ensure_ascii=False)
-          print("ok", p.get("act"), p.get("id"))
-          EOF
+          echo "id=$ID act=$ACT"
+          gh release download videos -p "$ID.json" -D /tmp/m --clobber -R "$GITHUB_REPOSITORY" || true
+          TOPIC=$(python -c "import json;print(json.load(open('/tmp/m/$ID.json')).get('topic',''))" 2>/dev/null || true)
+          if [ "$ACT" = "ok" ]; then echo "$ID" >> state/approved.log; fi
+          if [ "$ACT" = "no" ]; then
+            case "$TOPIC" in "Часть 1"*) [ -f state/series-queue.json ] && mv state/series-queue.json state/series-queue.rejected.json ;; esac
+          fi
+      - name: Публикация на все площадки
+        if: env.ACT == 'ok' && env.MAC == ''
+        run: PYTHONPATH=pipeline python pipeline/publish.py "$ID"
       - name: Сохранить
+        if: always()
         run: |
           git config user.name "curiousmind-bot"
           git config user.email "bot@users.noreply.github.com"
           git add state
-          git diff --cached --quiet || (git commit -q -m "decision" && git pull -q --rebase && git push -q)
+          git diff --cached --quiet || (git commit -q -m "decision $ACT" && git pull -q --rebase && git push -q)

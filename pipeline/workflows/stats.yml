@@ -1,0 +1,42 @@
+name: Статистика и выводы
+
+on:
+  schedule:
+    - cron: '0 18 * * 0'   # воскресенье ~20:00 по Варшаве
+  workflow_dispatch:
+
+concurrency:
+  group: state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  stats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+      YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+      YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+      YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+      IG_TOKEN: ${{ secrets.IG_TOKEN }}
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      GH_PAT: ${{ secrets.GH_PAT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -q requests
+      - name: Статистика → выводы
+        run: PYTHONPATH=pipeline python pipeline/stats.py
+      - name: Сохранить
+        run: |
+          git config user.name "curiousmind-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add state
+          git diff --cached --quiet || (git commit -q -m "insights" && git pull -q --rebase && git push -q)
