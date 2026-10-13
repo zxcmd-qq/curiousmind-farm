@@ -52,32 +52,51 @@ async function main() {
   out['Get Reddit'] = { stdout };
 
   // 4. Build Prompt → Gemini → Build Task
-  out['Build Prompt'] = node('Build_Prompt');
-  log('prompt:', out['Build Prompt'].format, '| историй:', (out['Build Prompt'].stories || []).length, '| символов:', out['Build Prompt'].prompt.length);
-  let gem = {};
-  for (let attempt = 1; attempt <= 4; attempt++) {   // Gemini иногда отвечает 429/503 — ждём и пробуем ещё
-    gem = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent', {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_KEY },
-      body: JSON.stringify({ generationConfig: { responseMimeType: 'application/json', temperature: 1.0 },
-        contents: [{ parts: [{ text: out['Build Prompt'].prompt }] }] }) }).then(r => r.json()).catch(e => ({ error: { message: String(e) } }));
-    if (gem.candidates?.[0]?.content?.parts?.[0]?.text || gem.promptFeedback?.blockReason) break;
-    log(`Gemini попытка ${attempt}:`, JSON.stringify(gem).slice(0, 400));
-    if (attempt < 4) await sleep(30000 * attempt);
+  async function askGemini(prompt) {
+    let gem = {};
+    for (let attempt = 1; attempt <= 4; attempt++) {   // Gemini иногда отвечает 429/503 — ждём и пробуем ещё
+      gem = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent', {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_KEY },
+        body: JSON.stringify({ generationConfig: { responseMimeType: 'application/json', temperature: 1.0 },
+          contents: [{ parts: [{ text: prompt }] }] }) }).then(r => r.json()).catch(e => ({ error: { message: String(e) } }));
+      if (gem.candidates?.[0]?.content?.parts?.[0]?.text || gem.promptFeedback?.blockReason || gem.candidates?.[0]?.finishReason) break;
+      log(`Gemini попытка ${attempt}:`, JSON.stringify(gem).slice(0, 400));
+      if (attempt < 4) await sleep(30000 * attempt);
+    }
+    if (gem.error) throw new Error('Gemini: ' + (gem.error.message || JSON.stringify(gem.error)).slice(0, 250));
+    return gem;
   }
-  if (gem.error) throw new Error('Gemini: ' + (gem.error.message || JSON.stringify(gem.error)).slice(0, 250));
-  out['Script (Gemini)'] = gem;
-  const bt = node('Build_Task', gem);
+
+  // истории — парами по рейтингу: если Gemini блокирует пару, выкидываем только её и пробуем следующую
+  let rr = {};
+  try { rr = JSON.parse(out['Get Reddit'].stdout || '{}'); } catch {}
+  const pool = (rr.stories || []).slice().sort((a, b) => (b.rating || 0) - (a.rating || 0));
+  const packs = format === 'reddit' && !rr.part2 && pool.length ? [] : [null];
+  for (let i = 0; i < pool.length && packs.length < 5; i += 2) packs.push(pool.slice(i, i + 2));
+  let bt, blockedIds = [];
+  for (const pack of packs) {
+    if (pack) out['Get Reddit'] = { stdout: JSON.stringify({ ...rr, stories: pack }) };
+    out['Build Prompt'] = node('Build_Prompt');
+    log('prompt:', out['Build Prompt'].format, '| историй:', (out['Build Prompt'].stories || []).length, '| символов:', out['Build Prompt'].prompt.length);
+    const gem = await askGemini(out['Build Prompt'].prompt);
+    out['Script (Gemini)'] = gem;
+    bt = node('Build_Task', gem);
+    if (!bt.blocked) break;
+    log('заблокировано:', bt.blocked, JSON.stringify(gem.promptFeedback || gem.candidates?.[0]?.safetyRatings || '').slice(0, 300));
+    blockedIds.push(...(bt.redditIds || []));
+  }
   out['Build Task'] = bt;
 
   // 5. Remember
-  if (bt.topic) append(`${ST}/used-facts.txt`, String(bt.topic).replace(/[`$\\"]/g, ''));
-  if (bt.redditId) append(`${ST}/used-facts.txt`, 'pikabu:' + bt.redditId);
-  for (const id of bt.redditIds || []) append(`${ST}/used-facts.txt`, 'pikabu:' + id);
-  if (bt.queueB64) fs.writeFileSync(`${ST}/series-queue.json`, Buffer.from(bt.queueB64, 'base64').toString('utf8'));
+  for (const id of blockedIds) append(`${ST}/used-facts.txt`, 'pikabu:' + id);
   if (bt.blocked) {
-    await tg('sendMessage', { chat_id: env.TG_CHAT_ID, text: `⚠️ Gemini заблокировал истории с Пикабу (${bt.blocked}). Выкинул пачку (${(bt.redditIds || []).length} шт.), в следующий раз будут другие.` });
+    await tg('sendMessage', { chat_id: env.TG_CHAT_ID, text: `⚠️ Gemini заблокировал все ${blockedIds.length} историй с Пикабу (${bt.blocked}). Выкинул их, в следующий раз будут другие.` });
     return;
   }
+  if (blockedIds.length) log('выкинуто заблокированных историй:', blockedIds.length);
+  if (bt.topic) append(`${ST}/used-facts.txt`, String(bt.topic).replace(/[`$\\"]/g, ''));
+  if (bt.redditId) append(`${ST}/used-facts.txt`, 'pikabu:' + bt.redditId);
+  if (bt.queueB64) fs.writeFileSync(`${ST}/series-queue.json`, Buffer.from(bt.queueB64, 'base64').toString('utf8'));
 
   // 6. MoneyPrinterTurbo
   const cr = await fetch(`${MPT}/api/v1/videos`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bt.body) }).then(r => r.json());
