@@ -15,6 +15,22 @@ const run = (env, workflow, inputs) => fetch(`https://api.github.com/repos/${env
   headers: { Authorization: `Bearer ${env.GH_PAT}`, Accept: 'application/vnd.github+json', 'User-Agent': 'curiousmind-bot' } });
 
 export default {
+  // Расписание (Cloudflare Cron Triggers — точнее, чем cron GitHub):
+  //   '13 7,12,17 * * *' → генерация: факт / квиз / история
+  //   '3 9,15,18 * * *'  → публикация из очереди (12/18/21 МСК)
+  //   '7 16,18 * * 0'    → воскресенье: подборка недели (16) и статистика (18)
+  async scheduled(event, env, ctx) {
+    const h = new Date(event.scheduledTime).getUTCHours();
+    if (event.cron.startsWith('13 ')) {
+      const f = { 7: 'facts', 12: 'quiz', 17: 'reddit' }[h];
+      if (f) ctx.waitUntil(run(env, 'generate.yml', { format: f }));
+    } else if (event.cron.startsWith('3 ')) {
+      ctx.waitUntil(run(env, 'publish-slot.yml', {}));
+    } else if (event.cron.startsWith('7 ')) {
+      ctx.waitUntil(run(env, h === 16 ? 'weekly.yml' : 'stats.yml', {}));
+    }
+  },
+
   async fetch(req, env) {
     if (req.method !== 'POST') return new Response('ok');
     if (env.HOOK_SECRET && req.headers.get('x-telegram-bot-api-secret-token') !== env.HOOK_SECRET) return new Response('no', { status: 403 });

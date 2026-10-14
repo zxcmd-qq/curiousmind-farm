@@ -1,8 +1,6 @@
 name: Подборка недели
 
 on:
-  schedule:
-    - cron: '0 16 * * 0'   # воскресенье ~18:00 по Варшаве
   workflow_dispatch:
     inputs:
       days:
