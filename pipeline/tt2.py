@@ -11,7 +11,7 @@ REPO = E["GITHUB_REPOSITORY"]
 PAGES_REPO = E.get("TT2_PAGES_REPO", "zxcmd-qq/zxcmd-qq.github.io")
 PAGES_URL = E.get("TT2_PAGES_URL", "https://zxcmd-qq.github.io")
 POST = re.sub(r"[^\w-]", "_", P.get("post") or str(int(time.time())))
-FONT = "resource/fonts/bangerscyrillic.ttf"
+FONT = "resource/fonts/Montserrat-Medium.ttf"
 os.makedirs("tt2", exist_ok=True)
 
 
@@ -30,24 +30,40 @@ for fid in P["files"][:34]:
 log("фото:", len(photos))
 
 # ---------- 2. начало текста с первой картинки (Gemini читает картинку)
-buf = io.BytesIO(); photos[0].save(buf, "JPEG", quality=90)
-hook = ""
-try:
-    r = requests.post("https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
-                      headers={"x-goog-api-key": E["GEMINI_KEY"]}, timeout=90, json={
-        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
-        "contents": [{"parts": [
-            {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(buf.getvalue()).decode()}},
-            {"text": "Прочитай основной текст на этой картинке-приколе (заголовок/подпись, не водяные знаки и не ники). "
-                     "Верни его начало: первые 2-3 слова, максимум 20 символов, как интригующий обрыв, без многоточия. "
-                     "Если текста нет — пустую строку. Ответь ТОЛЬКО JSON: {\"start\": \"...\", \"full\": \"весь текст\"}"}]}]}).json()
-    t = r["candidates"][0]["content"]["parts"][0]["text"]
-    hook = json.loads(t[t.find("{"):t.rfind("}") + 1]).get("start", "").strip()
-except Exception as e:
-    log("OCR:", str(e)[:200])
-if not hook:
-    hook = " ".join((P.get("caption") or "").split()[:3])[:20]
-hook = (hook.rstrip(" .…!?,") + "…").upper() if hook else "СМОТРИ"
+def ocr(im):
+    b = io.BytesIO(); im.save(b, "JPEG", quality=92)
+    img = base64.b64encode(b.getvalue()).decode()
+    ask = ("На картинке-меме есть текст (заголовок или подпись). Перепиши ВЕСЬ этот текст дословно, как написано, "
+           "без ников, водяных знаков и названий каналов. Ответь ТОЛЬКО JSON: {\"text\": \"...\"}. Если текста нет — {\"text\": \"\"}.")
+    for model in ("gemini-flash-latest", "gemini-flash-lite-latest", "gemini-flash-latest"):
+        try:
+            r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                              headers={"x-goog-api-key": E["GEMINI_KEY"]}, timeout=90, json={
+                "generationConfig": {"responseMimeType": "application/json", "temperature": 0},
+                "contents": [{"parts": [{"inlineData": {"mimeType": "image/jpeg", "data": img}}, {"text": ask}]}]}).json()
+            t = r["candidates"][0]["content"]["parts"][0]["text"]
+            txt = json.loads(t[t.find("{"):t.rfind("}") + 1]).get("text", "").strip()
+            log(f"OCR ({model}):", txt[:120])
+            return txt
+        except Exception as e:
+            log(f"OCR ({model}) ошибка:", str(e)[:150], str(locals().get("r", ""))[:300])
+            time.sleep(8)
+    return ""
+
+
+def start_of(text, n_words=3, max_chars=22):
+    words = re.sub(r"\s+", " ", text).strip().split(" ")
+    out = ""
+    for w in words[:n_words]:
+        if out and len(out) + 1 + len(w) > max_chars:
+            break
+        out = (out + " " + w).strip()
+    return out
+
+
+full = ocr(photos[0])
+hook = start_of(full) or start_of(P.get("caption") or "")
+hook = (hook.rstrip(" .…!?,:;-") + "...") if hook else "СМОТРИ ДО КОНЦА..."
 log("обложка:", hook)
 
 
@@ -60,7 +76,7 @@ def cover():
         base = Image.new("RGB", (1080, 1350), "#111")
     W, H = base.size
     d = ImageDraw.Draw(base)
-    size = int(W * 0.14)
+    size = int(W * 0.085)
     while size > 30:
         f = ImageFont.truetype(FONT, size)
         words, lines, cur = hook.split(), [], ""
@@ -74,11 +90,11 @@ def cover():
         if len(lines) <= 3 and max(d.textlength(l, font=f) for l in lines) <= W * 0.88:
             break
         size -= 6
-    lh = int(size * 1.05)
+    lh = int(size * 1.25)
     arrow_h = int(size * 0.9)
     total = lh * len(lines) + int(size * 0.35) + arrow_h
     y = (H - total) // 2
-    sw = max(4, size // 12)
+    sw = max(2, size // 18)
     for l in lines:
         x = (W - d.textlength(l, font=f)) / 2
         d.text((x, y), l, font=f, fill="#FFFFFF", stroke_width=sw, stroke_fill="#000000")
