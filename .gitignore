@@ -8,3 +8,4 @@ __pycache__/
 mpt.log
 *.mp4
 _t.mjs
+.tt/

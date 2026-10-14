@@ -1,0 +1,35 @@
+name: ТГК → TikTok-карусель (@obezyanagrustnaya)
+
+on:
+  repository_dispatch:
+    types: [tt2]
+
+concurrency:
+  group: tt2
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  carousel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_PAT: ${{ secrets.GH_PAT }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+      TT_CLIENT_KEY: ${{ secrets.TT_CLIENT_KEY }}
+      TT_CLIENT_SECRET: ${{ secrets.TT_CLIENT_SECRET }}
+      TT2_REFRESH_TOKEN: ${{ secrets.TT2_REFRESH_TOKEN }}
+      PAYLOAD: ${{ toJson(github.event.client_payload) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -q requests pillow
+      - name: Пост → карусель
+        run: PYTHONPATH=pipeline python pipeline/tt2.py

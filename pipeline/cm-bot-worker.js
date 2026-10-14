@@ -1,7 +1,8 @@
 // Curious Mind — бот для кнопок ✅/❌ (Cloudflare Worker, webhook Telegram).
 // Секреты: TG_BOT_TOKEN, TG_CHAT_ID, GH_PAT, GH_REPO (например zxcmd-qq/curiousmind-farm), HOOK_SECRET (любая строка)
 // Привязка KV с именем KV (для альбомов видео)
-// Подключение: https://api.telegram.org/bot<TOKEN>/setWebhook?url=<адрес воркера>&secret_token=<HOOK_SECRET>&allowed_updates=["callback_query","message"]
+// Подключение: setWebhook с allowed_updates=["callback_query","message","channel_post"]
+// Необязательно: TT2_CHANNEL — @ник или id ТГК для каруселей (иначе берётся любой канал, кроме @crpstv)
 
 const tg = (env, method, body) => fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/${method}`, {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json()).catch(() => ({}));
@@ -31,10 +32,38 @@ export default {
     }
   },
 
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     if (req.method !== 'POST') return new Response('ok');
     if (env.HOOK_SECRET && req.headers.get('x-telegram-bot-api-secret-token') !== env.HOOK_SECRET) return new Response('no', { status: 403 });
     const u = await req.json().catch(() => ({}));
+
+    // ---------- посты из второго ТГК → карусель в TikTok @obezyanagrustnaya
+    const cp = u.channel_post;
+    if (cp) {
+      const uname = String(cp.chat?.username || '').toLowerCase();
+      if (uname === 'crpstv') return new Response('ok');
+      if (env.TT2_CHANNEL && String(cp.chat.id) !== env.TT2_CHANNEL && uname !== env.TT2_CHANNEL.replace('@', '').toLowerCase()) return new Response('ok');
+      const ph = cp.photo ? cp.photo[cp.photo.length - 1] : (cp.document && /^image\//.test(cp.document.mime_type || '') ? cp.document : null);
+      if (!ph) return new Response('ok');
+      const post = `${cp.chat.id}_${cp.media_group_id || cp.message_id}`;
+      const send = files => fetch(`https://api.github.com/repos/${env.GH_REPO}/dispatches`, { method: 'POST',
+        body: JSON.stringify({ event_type: 'tt2', client_payload: { ...files, post, chan: cp.chat.title || '' } }),
+        headers: { Authorization: `Bearer ${env.GH_PAT}`, Accept: 'application/vnd.github+json', 'User-Agent': 'curiousmind-bot' } });
+      if (!cp.media_group_id || !env.KV) {
+        ctx.waitUntil(send({ files: [ph.file_id], caption: cp.caption || '' }));
+        return new Response('ok');
+      }
+      // альбом: каждое фото приходит отдельно — копим 15 сек, отправляет то, у кого меньший номер
+      await env.KV.put(`tt2:${post}:${cp.message_id}`, JSON.stringify({ id: cp.message_id, f: ph.file_id, c: cp.caption || '' }), { expirationTtl: 3600 });
+      ctx.waitUntil((async () => {
+        await new Promise(r => setTimeout(r, 15000));
+        const list = await env.KV.list({ prefix: `tt2:${post}:` });
+        const items = (await Promise.all(list.keys.map(k => env.KV.get(k.name, 'json')))).filter(Boolean).sort((a, b) => a.id - b.id);
+        if (!items.length || items[0].id !== cp.message_id) return;
+        await send({ files: items.map(i => i.f), caption: items.map(i => i.c).find(Boolean) || '' });
+      })());
+      return new Response('ok');
+    }
 
     // кнопки ✅/❌ под роликом
     const q = u.callback_query;
@@ -53,6 +82,16 @@ export default {
 
     const m = u.message;
     if (!m || String(m.chat?.id) !== String(env.TG_CHAT_ID)) return new Response('ok');
+
+    // фото с подписью «обложка» → шаблон первого слайда каруселей
+    if (m.photo && /обложк|cover/i.test(m.caption || '')) {
+      const ph = m.photo[m.photo.length - 1];
+      const r = await fetch(`https://api.github.com/repos/${env.GH_REPO}/dispatches`, { method: 'POST',
+        body: JSON.stringify({ event_type: 'asset', client_payload: { kind: 'tt2cover', file_id: ph.file_id, uid: ph.file_unique_id } }),
+        headers: { Authorization: `Bearer ${env.GH_PAT}`, Accept: 'application/vnd.github+json', 'User-Agent': 'curiousmind-bot' } });
+      if (r.status !== 204) await tg(env, 'sendMessage', { chat_id: m.chat.id, text: '⚠️ GitHub: ' + r.status });
+      return new Response('ok');
+    }
 
     // видео из SnippetFarm: подпись «майнкрафт» / «сатисфай» → в фоны, «баннер» → новый баннер
     const file = m.video || m.animation || (m.document && /^video\//.test(m.document.mime_type || '') ? m.document : null);
@@ -96,7 +135,7 @@ export default {
         const r = await run(env, 'generate.yml', { format: f });
         await tg(env, 'sendMessage', { chat_id: m.chat.id, text: r.status === 204 ? `🎬 Запустил: ${f}. Ролик придёт минут через 10-15.` : `⚠️ GitHub: ${r.status}` });
       } else if (m.text.trim() === '/start' || m.text.trim() === '/help') {
-        await tg(env, 'sendMessage', { chat_id: m.chat.id, text: 'Команды:\n/fact — факт\n/quiz — квиз\n/story — история\n/now — опубликовать следующий из очереди сразу\n\nВидео с подписью «майнкрафт» или «сатисфай» (можно пачкой) — в фоны для историй.\nВидео на зелёном фоне с подписью «баннер» — баннер на все ролики. «баннер убрать» — убрать.\n\nРолики по расписанию приходят сами, под ними ✅/❌ (✅ = в очередь на прайм-тайм).' });
+        await tg(env, 'sendMessage', { chat_id: m.chat.id, text: 'Команды:\n/fact — факт\n/quiz — квиз\n/story — история\n/now — опубликовать следующий из очереди сразу\n\nВидео с подписью «майнкрафт» или «сатисфай» (можно пачкой) — в фоны для историй.\nВидео на зелёном фоне с подписью «баннер» — баннер на все ролики. «баннер убрать» — убрать.\nФото с подписью «обложка» — шаблон первого слайда каруселей для @obezyanagrustnaya.\n\nРолики по расписанию приходят сами, под ними ✅/❌ (✅ = в очередь на прайм-тайм).' });
       }
     }
     return new Response('ok');

@@ -1,6 +1,6 @@
 """GitHub: принимает файл из бота.
 asset.py <kind> <file_id> <uid>
-kind: minecraft / satisfy → новый фон для историй;  banner → новый баннер (зелёный фон убирается);  nobanner → убрать баннер."""
+kind: minecraft / satisfy → новый фон для историй;  tt2cover → шаблон обложки каруселей;  banner → новый баннер (зелёный фон убирается);  nobanner → убрать баннер."""
 import json, os, subprocess, sys
 import requests
 from common import E, log, tg
@@ -27,6 +27,13 @@ if not info.get("ok"):
     sys.exit(0)
 src = "in.bin"
 open(src, "wb").write(requests.get(f"https://api.telegram.org/file/bot{E['TG_BOT_TOKEN']}/{info['result']['file_path']}", timeout=300).content)
+if kind == "tt2cover":   # шаблон первого слайда для TikTok-каруселей
+    from PIL import Image
+    Image.open(src).convert("RGB").save("tt2-cover.jpg", "JPEG", quality=92)
+    gh("release", "upload", "assets", "tt2-cover.jpg", "--clobber", check=True)
+    say("✅ Шаблон обложки для каруселей @obezyanagrustnaya сохранён. На нём будет начало текста с картинки + стрелка ➜")
+    sys.exit(0)
+
 dur = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", src], capture_output=True, text=True).stdout.strip()
 if not dur:
     say("⚠️ Это не похоже на видео.")
