@@ -1,7 +1,7 @@
 const p = $('Pick Format').first().json;
 let format = p.format;
 const STYLE = 'Пиши ОЧЕНЬ простыми словами, как другу во дворе: никаких научных и умных терминов (а если без термина никак — сразу объясни его по-простому). Разговорный стиль с русским матом. Мат пиши ПОЛНОСТЬЮ, без звёздочек (сука, блять, ебать, нахуй) — его читает диктор, в субтитрах он замажется сам. Первая фраза — мощный крючок.';
-const usedTopics = p.used.filter(u => !u.startsWith('reddit:')).slice(-100);
+const usedTopics = p.used.filter(u => !/^(reddit|pikabu):/.test(u)).slice(-200);
 const usedIds = new Set(p.used.filter(u => /^(reddit|pikabu):/.test(u)).map(u => u.slice(7)));
 const AVOID = usedTopics.length ? 'Это уже было, НЕ повторяй и не бери похожее: ' + usedTopics.join(' ; ') + '\n' : '';
 const LEARN = (p.ins && (p.ins.tips || []).length) ? 'Что лучше всего заходит НАШЕЙ аудитории по статистике (учитывай): ' + p.ins.tips.join('; ') +

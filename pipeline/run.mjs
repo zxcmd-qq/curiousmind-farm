@@ -87,6 +87,30 @@ async function main() {
   }
   out['Build Task'] = bt;
 
+  // 4b. Анти-повтор: Gemini сверяет СУТЬ нового ролика с прошлыми темами (заголовки бывают разные, а предмет тот же)
+  const pastTopics = read(`${ST}/used-facts.txt`).split('\n').map(s => s.trim()).filter(s => s && !/^(reddit|pikabu):/.test(s)).slice(-400);
+  let subject = '';
+  if (!bt.blocked && format !== 'reddit' && pastTopics.length) {
+    for (let tryN = 0; tryN < 3; tryN++) {
+      let chk = {};
+      try {
+        const g = await askGemini(`Новый ролик. Заголовок: «${bt.topic}». Озвучка: «${bt.script}»\n\nПрошлые ролики (заголовок, иногда [суть]):\n${pastTopics.join('\n')}\n\n` +
+          'Определи СУТЬ нового ролика в 2-4 словах — главный предмет или факт (например «гребля калории», «жвачка в СССР»). ' +
+          'Потом проверь: был ли уже ролик ПРО ТО ЖЕ САМОЕ — тот же предмет или тот же факт, даже если заголовок другой? Просто общая область (например «животные», «космос») — не повтор. ' +
+          'Ответь ТОЛЬКО JSON: {"subject": "...", "dup": true или false, "same_as": "какой прошлый ролик или пусто"}');
+        chk = JSON.parse((g.candidates?.[0]?.content?.parts?.[0]?.text || '').match(/\{[\s\S]*\}/)[0]);
+      } catch (e) { log('проверка повторов не удалась:', String(e).slice(0, 200)); break; }
+      subject = String(chk.subject || '').replace(/[\[\]\n`$\\"]/g, '').trim().slice(0, 40);
+      if (!chk.dup || tryN === 2) { log(chk.dup ? 'всё ещё похоже, оставляю:' : 'повтора нет, суть:', subject); break; }
+      log(`повтор ${tryN + 1}: «${subject}» уже было («${chk.same_as}») → беру другую тему`);
+      out['Build Prompt'].prompt += `\nВАЖНО: тема «${subject}» уже была («${String(chk.same_as || '').slice(0, 80)}»). Возьми СОВСЕМ другой предмет.`;
+      const gem = await askGemini(out['Build Prompt'].prompt);
+      const nb = node('Build_Task', gem);
+      if (nb.blocked) break;
+      out['Script (Gemini)'] = gem; bt = nb; out['Build Task'] = bt;
+    }
+  }
+
   // 5. Remember
   for (const id of blockedIds) append(`${ST}/used-facts.txt`, 'pikabu:' + id);
   if (bt.blocked) {
@@ -94,7 +118,7 @@ async function main() {
     return;
   }
   if (blockedIds.length) log('выкинуто заблокированных историй:', blockedIds.length);
-  if (bt.topic) append(`${ST}/used-facts.txt`, String(bt.topic).replace(/[`$\\"]/g, ''));
+  if (bt.topic) append(`${ST}/used-facts.txt`, String(bt.topic).replace(/[`$\\"]/g, '') + (subject ? ` [суть: ${subject}]` : ''));
   if (bt.redditId) append(`${ST}/used-facts.txt`, 'pikabu:' + bt.redditId);
   if (bt.queueB64) fs.writeFileSync(`${ST}/series-queue.json`, Buffer.from(bt.queueB64, 'base64').toString('utf8'));
 
