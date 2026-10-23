@@ -182,11 +182,17 @@ export default {
         await tg(env, 'deleteMessage', { chat_id: m.chat.id, message_id: m.message_id });   // ключ не висит в чате
         if (!arg) { await say('Пришли так: /elkey ключ_от_ElevenLabs\n(сообщение с ключом я сразу удалю)\n\n/elkey удалить — убрать ключ'); return new Response('ok'); }
         if (/^(удалить|delete|off)$/i.test(arg)) { await env.KV.delete('elkey'); await say('🗑 Ключ ElevenLabs удалён. Пока он не нужен — озвучка будет Gemini.'); return new Response('ok'); }
-        const left = await elLeft(arg), voices = await elVoices(arg);
-        if (left == null && voices == null) { await say('❌ ElevenLabs не принял ключ. Проверь, что скопирован целиком (и что у ключа включён доступ к Text to Speech).'); return new Response('ok'); }
-        await env.KV.put('elkey', arg);
+        const chk = await el(arg, '/v1/user/subscription');
+        const left = chk.ok ? (chk.j.character_limit || 0) - (chk.j.character_count || 0) : null;
+        await env.KV.put('elkey', arg);                      // сохраняем всегда: у ключа может не быть права на просмотр остатка
+        if (!chk.ok) {
+          const d = chk.j.detail || chk.j;
+          await say(`💾 Ключ сохранил, но ElevenLabs на проверку ответил ${chk.status}: ${(d.message || d.status || JSON.stringify(d)).slice(0, 250)}\n\n` +
+            'Если там про права (permission) — ок, озвучка всё равно будет работать, просто остаток не увижу (или включи у ключа User → Read). ' +
+            'Если «invalid api key» — ключ скопирован не целиком.\n\nВключить голос: /voice adam');
+        }
         const cur = await env.KV.get('voice');
-        await say('✅ Ключ ElevenLabs сохранён.' + (left != null ? ` Осталось ${left} символов (~${Math.floor(left / 600)} роликов).` : '') +
+        if (chk.ok) await say('✅ Ключ ElevenLabs сохранён.' + (left != null ? ` Осталось ${left} символов (~${Math.floor(left / 600)} роликов).` : '') +
           (cur && cur.startsWith('elevenlabs:') ? '' : '\n\nВключить голос: /voice adam (или /voices — выбрать из списка)'));
         return new Response('ok');
       }
