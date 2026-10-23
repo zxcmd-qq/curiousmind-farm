@@ -30,7 +30,7 @@ async function tg(method, body, isForm = false) {
 async function main() {
   // 1. Settings
   out['Settings'] = { TG_BOT_TOKEN: env.TG_BOT_TOKEN, TG_CHAT_ID: env.TG_CHAT_ID, MPT, FORCE_FORMAT: env.FORMAT || '',
-    VOICE: env.VOICE || 'gemini:Fenrir-Excitable', trigger: 'make' };
+    VOICE: env.CM_VOICE || env.VOICE || 'gemini:Fenrir-Excitable', trigger: 'make' };
 
   // 2. Read Used + insights → Pick Format
   const used = read(`${ST}/used-facts.txt`).split('\n').slice(-300).join('\n');

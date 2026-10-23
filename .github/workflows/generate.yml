@@ -49,6 +49,12 @@ jobs:
           path: ~/.cache/huggingface
           key: whisper-large-v3
 
+      - name: Голос (из бота /voice, /elkey)
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          CM_BOT_URL: ${{ vars.CM_BOT_URL }}
+        run: pip install -q requests && python pipeline/voice_cfg.py
+
       - name: Конфиг
         env:
           MPT_CONFIG_B64: ${{ secrets.MPT_CONFIG_B64 }}

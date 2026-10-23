@@ -62,7 +62,7 @@ jobs:
         run: |
           grep -qx "$ID" state/publish-queue.txt 2>/dev/null || echo "$ID" >> state/publish-queue.txt
           N=$(grep -c . state/publish-queue.txt)
-          PYTHONPATH=pipeline python -c "from common import tg,E; tg('sendMessage', chat=E['TG_CHAT_ID'], text='⏰ В очереди: $N. Выйдет в ближайший прайм-тайм (12:00 / 18:00 / 21:00 МСК). Сразу — команда /now')"
+          PYTHONPATH=pipeline python -c "from common import tg,E; tg('sendMessage', chat=E['TG_CHAT_ID'], text='⏰ В очереди: $N. Выйдет в ближайший прайм-тайм (12 / 15 / 18 / 21 МСК). Сразу — команда /now')"
       - name: Сохранить
         if: always()
         run: |
